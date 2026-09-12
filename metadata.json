@@ -1,0 +1,6 @@
+{
+  "name": "Gemini ThoughtVault",
+  "description": "A secure personal journal for private AI reflections and thought evolution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
