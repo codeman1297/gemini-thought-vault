@@ -1,0 +1,55 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Catch-all default deny: No unmapped access or global collectionGroup leakage
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // User root namespace: strictly owner-isolated
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      // Thread collection
+      match /threads/{threadId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId)
+          && isValidId(threadId)
+          && request.resource.data.userId == userId
+          && request.resource.data.title is string
+          && request.resource.data.title.size() <= 120;
+        allow update: if isOwner(userId)
+          && request.resource.data.userId == resource.data.userId;
+        allow delete: if isOwner(userId);
+
+        // Interaction subcollection
+        match /interactions/{interactionId} {
+          allow read: if isOwner(userId);
+          allow create: if isOwner(userId)
+            && isValidId(interactionId)
+            && request.resource.data.userId == userId
+            && request.resource.data.userPrompt is string
+            && request.resource.data.userPrompt.size() <= 10000;
+          allow update: if isOwner(userId)
+            && request.resource.data.userId == resource.data.userId;
+          allow delete: if isOwner(userId);
+        }
+      }
+    }
+  }
+}

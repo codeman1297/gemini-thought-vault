@@ -1,22 +1,35 @@
 /**
  * Journal API Routes
+ * Milestone 5: Persistent Cloud Firestore Storage & Authoritative History
  * 
  * Production Security Rules:
- * 1. Protected by verifyFirebaseToken middleware.
- * 2. Identity derived strictly from req.user.uid.
- * 3. Strict payload validation and character limits.
- * 4. User-based in-memory rate limiting.
- * 5. Structured output matching future Firestore schema.
+ * 1. Protected by verifyFirebaseToken middleware; identity derived strictly from req.user.uid.
+ * 2. Absolute User Isolation: Thread and interaction operations scoped to /users/${req.user.uid}/...
+ * 3. Authoritative History: Conversation history for Gemini is loaded from Firestore, not client payloads.
+ * 4. Idempotency: Prevents duplicate interaction persistence via clientInteractionId.
+ * 5. Explicit Persistence Handling: Returns persistence status; supports Retry Save on transient DB issues.
  * 6. Privacy-first audit logging (zero journal text in logs).
  */
 
 import { Router, type Response } from 'express';
 import { verifyFirebaseToken } from '../middleware/auth';
 import { generateContentWithFallback } from '../services/gemini';
+import { 
+  listUserThreads, 
+  getUserThread, 
+  getThreadInteractions, 
+  loadAuthoritativeGeminiHistory,
+  checkInteractionExists,
+  createThread, 
+  persistInteraction,
+  retrySaveInteraction 
+} from '../services/journalStore';
 import type { 
   AuthenticatedRequest, 
   JournalChatRequestBody, 
-  ConversationTurn 
+  CreateThreadRequestBody,
+  RetrySaveRequestBody,
+  JournalInteraction
 } from '../types';
 
 const router = Router();
@@ -35,7 +48,7 @@ function checkRateLimit(uid: string): boolean {
   
   if (activeTimestamps.length >= RATE_LIMIT_MAX_REQUESTS) {
     userRateLimits.set(uid, activeTimestamps);
-    return false; // Rate limit exceeded
+    return false;
   }
 
   activeTimestamps.push(now);
@@ -57,8 +70,183 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 /**
+ * GET /api/journal/threads
+ * List all journal threads owned by the authenticated user
+ */
+router.get('/threads', verifyFirebaseToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = req.user;
+  if (!user || !user.uid) {
+    res.status(401).json({ error: 'Unauthorized: Missing user authentication context.', code: 'UNAUTHORIZED' });
+    return;
+  }
+
+  try {
+    const threads = await listUserThreads(user.uid);
+    res.status(200).json({
+      success: true,
+      threads,
+    });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Failed to retrieve threads';
+    console.error(`[JOURNAL THREADS ERROR] User: ${user.uid.slice(0, 8)}... | Error: ${errorMsg}`);
+    res.status(500).json({
+      error: 'Unable to retrieve your journal threads at this time.',
+      code: 'THREADS_FETCH_FAILED'
+    });
+  }
+});
+
+/**
+ * POST /api/journal/threads
+ * Create a new user-scoped journal thread (optionally with an opening prompt)
+ */
+router.post('/threads', verifyFirebaseToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = req.user;
+  if (!user || !user.uid) {
+    res.status(401).json({ error: 'Unauthorized: Missing user authentication context.', code: 'UNAUTHORIZED' });
+    return;
+  }
+
+  const body = (req.body && typeof req.body === 'object') ? (req.body as CreateThreadRequestBody) : {};
+  const rawTitle = typeof body.title === 'string' ? body.title.trim() : '';
+  const rawPrompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+  const clientInteractionId = typeof body.clientInteractionId === 'string' ? body.clientInteractionId.trim() : undefined;
+
+  try {
+    // 1. Create the new thread document under /users/${uid}/threads
+    const newThread = await createThread(user.uid, {
+      title: rawTitle || (rawPrompt ? rawPrompt.slice(0, 40) + '...' : 'New Thought Thread'),
+      previewSnippet: rawPrompt.slice(0, 150),
+    });
+
+    // If opening prompt was supplied, generate initial reflection turn
+    if (rawPrompt) {
+      if (rawPrompt.length > 10000) {
+        res.status(400).json({
+          error: 'Prompt exceeds maximum allowed length (10,000 characters).',
+          code: 'PROMPT_TOO_LONG'
+        });
+        return;
+      }
+
+      if (!checkRateLimit(user.uid)) {
+        res.status(429).json({
+          error: 'Rate limit exceeded. Please wait a moment before sending your prompt.',
+          code: 'RATE_LIMIT_EXCEEDED'
+        });
+        return;
+      }
+
+      const aiResult = await generateContentWithFallback({
+        prompt: rawPrompt,
+        history: [],
+      });
+
+      // Persist opening interaction
+      const interaction = await persistInteraction({
+        uid: user.uid,
+        threadId: newThread.id,
+        userPrompt: rawPrompt,
+        geminiResponse: aiResult.text,
+        insights: aiResult.insights,
+        modelMetadata: {
+          modelUsed: aiResult.modelUsed,
+          fallbackUsed: aiResult.fallbackUsed,
+          attemptsCount: aiResult.attemptsCount,
+          latencyMs: aiResult.latencyMs,
+        },
+        clientInteractionId,
+        turnIndex: 0,
+      });
+
+      res.status(201).json({
+        success: true,
+        thread: {
+          ...newThread,
+          turnCount: 1,
+          coreThemes: aiResult.insights.coreThemes,
+          lastInteractionId: interaction.id,
+        },
+        interaction,
+        persistence: {
+          status: 'persisted',
+          savedAt: interaction.createdAt,
+          interactionId: interaction.id,
+          threadId: newThread.id,
+        },
+      });
+      return;
+    }
+
+    // Return empty thread
+    res.status(201).json({
+      success: true,
+      thread: newThread,
+    });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Failed to create thread';
+    console.error(`[JOURNAL THREAD CREATE ERROR] User: ${user.uid.slice(0, 8)}... | Error: ${errorMsg}`);
+    res.status(500).json({
+      error: 'Unable to create a new journal thread.',
+      code: 'THREAD_CREATE_FAILED'
+    });
+  }
+});
+
+/**
+ * GET /api/journal/threads/:threadId
+ * Retrieve a specific thread and its authoritative chronological interactions
+ */
+router.get('/threads/:threadId', verifyFirebaseToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = req.user;
+  if (!user || !user.uid) {
+    res.status(401).json({ error: 'Unauthorized: Missing user authentication context.', code: 'UNAUTHORIZED' });
+    return;
+  }
+
+  const threadId = req.params.threadId;
+  if (!threadId || typeof threadId !== 'string') {
+    res.status(400).json({ error: 'Invalid thread ID parameter.', code: 'INVALID_THREAD_ID' });
+    return;
+  }
+
+  try {
+    const thread = await getUserThread(user.uid, threadId);
+    if (!thread) {
+      // 404: Fail-closed. Does not disclose if thread belongs to another user
+      res.status(404).json({
+        error: 'Thread not found or unauthorized.',
+        code: 'THREAD_NOT_FOUND'
+      });
+      return;
+    }
+
+    const interactions = await getThreadInteractions(user.uid, threadId);
+
+    res.status(200).json({
+      success: true,
+      thread,
+      interactions,
+    });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Failed to fetch thread details';
+    console.error(`[JOURNAL THREAD FETCH ERROR] User: ${user.uid.slice(0, 8)}... | Error: ${errorMsg}`);
+    res.status(500).json({
+      error: 'Unable to retrieve thread details.',
+      code: 'THREAD_FETCH_FAILED'
+    });
+  }
+});
+
+/**
  * POST /api/journal/chat
  * Authenticated multi-turn reflection endpoint
+ * Milestone 5 Enhancements:
+ * - Scoped to user's thread
+ * - Loads authoritative history from Firestore (discards client-supplied history)
+ * - Idempotency protection via clientInteractionId
+ * - Atomic persistence into Firestore
+ * - Explicit persistence status & fallback handling
  */
 router.post('/chat', verifyFirebaseToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   const user = req.user;
@@ -67,7 +255,7 @@ router.post('/chat', verifyFirebaseToken, async (req: AuthenticatedRequest, res:
     return;
   }
 
-  // Enforce rate limiting
+  // Rate limiting check
   if (!checkRateLimit(user.uid)) {
     res.status(429).json({
       error: 'Too many reflection requests. Please wait a moment before sharing your next thought.',
@@ -76,7 +264,7 @@ router.post('/chat', verifyFirebaseToken, async (req: AuthenticatedRequest, res:
     return;
   }
 
-  // Defensive request body inspection
+  // Inspect request body
   const body = (req.body && typeof req.body === 'object') ? (req.body as JournalChatRequestBody) : {};
   const rawPrompt = body.prompt;
 
@@ -105,86 +293,150 @@ router.post('/chat', verifyFirebaseToken, async (req: AuthenticatedRequest, res:
     return;
   }
 
-  // Validate conversation history if provided
-  const validatedHistory: ConversationTurn[] = [];
-  let totalHistoryLength = 0;
-
-  if (body.history) {
-    if (!Array.isArray(body.history)) {
-      res.status(400).json({
-        error: 'Invalid request: "history" must be an array of conversation turns.',
-        code: 'INVALID_HISTORY'
-      });
-      return;
-    }
-
-    if (body.history.length > 10) {
-      res.status(400).json({
-        error: 'Conversation history exceeds maximum of 10 turns per active session.',
-        code: 'HISTORY_TOO_LONG'
-      });
-      return;
-    }
-
-    for (const turn of body.history) {
-      if (!turn || typeof turn !== 'object') continue;
-      const role = turn.role;
-      const text = typeof turn.text === 'string' ? turn.text.trim() : '';
-
-      if (role !== 'user' && role !== 'model') {
-        res.status(400).json({
-          error: 'Invalid conversation turn role. Must be "user" or "model".',
-          code: 'INVALID_ROLE'
-        });
-        return;
-      }
-
-      if (text.length > 10000) {
-        res.status(400).json({
-          error: 'History turn exceeds maximum character limit (10,000 characters).',
-          code: 'HISTORY_TURN_TOO_LONG'
-        });
-        return;
-      }
-
-      totalHistoryLength += text.length;
-      validatedHistory.push({ role, text });
-    }
-
-    if (totalHistoryLength + prompt.length > 35000) {
-      res.status(400).json({
-        error: 'Total conversation payload exceeds size limits. Start a new reflection thread.',
-        code: 'PAYLOAD_LIMIT_EXCEEDED'
-      });
-      return;
-    }
-  }
+  const clientInteractionId = typeof body.clientInteractionId === 'string' && body.clientInteractionId.trim()
+    ? body.clientInteractionId.trim()
+    : undefined;
 
   try {
-    const result = await generateContentWithFallback({
+    // 1. Resolve or Create Target Thread
+    let targetThreadId = body.threadId;
+    let turnIndex = 0;
+
+    if (targetThreadId) {
+      const existingThread = await getUserThread(user.uid, targetThreadId);
+      if (!existingThread) {
+        res.status(404).json({
+          error: 'Thread not found or unauthorized.',
+          code: 'THREAD_NOT_FOUND'
+        });
+        return;
+      }
+
+      // Check Idempotency: Has this interaction already been persisted?
+      if (clientInteractionId) {
+        const existingInteraction = await checkInteractionExists(user.uid, targetThreadId, clientInteractionId);
+        if (existingInteraction) {
+          console.info(`[JOURNAL IDEMPOTENT] Returned existing interaction ${clientInteractionId} for user ${user.uid.slice(0, 8)}`);
+          res.status(200).json({
+            success: true,
+            data: {
+              userPrompt: existingInteraction.userPrompt,
+              geminiResponse: existingInteraction.geminiResponse,
+              insights: existingInteraction.insights,
+              modelMetadata: existingInteraction.modelMetadata,
+              threadId: targetThreadId,
+              interactionId: existingInteraction.id,
+              turnIndex: existingInteraction.turnIndex,
+              persistence: {
+                status: 'persisted',
+                savedAt: existingInteraction.createdAt,
+                interactionId: existingInteraction.id,
+                threadId: targetThreadId,
+              },
+              timestamp: existingInteraction.createdAt,
+            },
+          });
+          return;
+        }
+      }
+
+      const existingInteractions = await getThreadInteractions(user.uid, targetThreadId);
+      turnIndex = existingInteractions.length;
+    } else {
+      // Auto-create a thread if none provided
+      const newThread = await createThread(user.uid, {
+        title: prompt.slice(0, 40) + '...',
+        previewSnippet: prompt.slice(0, 150),
+      });
+      targetThreadId = newThread.id;
+      turnIndex = 0;
+    }
+
+    // 2. Load Authoritative History from Firestore (Discard client-provided history)
+    const authoritativeHistory = await loadAuthoritativeGeminiHistory(user.uid, targetThreadId, 5);
+
+    // 3. Invoke Gemini with Constitution Fallback Ladder
+    const aiResult = await generateContentWithFallback({
       prompt,
-      history: validatedHistory,
+      history: authoritativeHistory,
     });
 
-    // Privacy-first non-sensitive audit log
     console.info(
-      `[JOURNAL AUDIT] User: ${user.uid.slice(0, 8)}... | Model: ${result.modelUsed} | Fallback: ${result.fallbackUsed} | Attempts: ${result.attemptsCount} | Duration: ${result.latencyMs}ms`
+      `[JOURNAL AUDIT] User: ${user.uid.slice(0, 8)}... | Model: ${aiResult.modelUsed} | Fallback: ${aiResult.fallbackUsed} | Attempts: ${aiResult.attemptsCount} | Duration: ${aiResult.latencyMs}ms`
     );
 
-    // Return structured response (compatible with future Milestone 5 Firestore documents)
+    // 4. Persist Interaction to Firestore with Atomic Thread Metadata Update
+    let persistedInteraction: JournalInteraction | null = null;
+    let persistenceFailed = false;
+
+    try {
+      persistedInteraction = await persistInteraction({
+        uid: user.uid,
+        threadId: targetThreadId,
+        userPrompt: prompt,
+        geminiResponse: aiResult.text,
+        insights: aiResult.insights,
+        modelMetadata: {
+          modelUsed: aiResult.modelUsed,
+          fallbackUsed: aiResult.fallbackUsed,
+          attemptsCount: aiResult.attemptsCount,
+          latencyMs: aiResult.latencyMs,
+        },
+        clientInteractionId,
+        turnIndex,
+      });
+    } catch (dbErr: unknown) {
+      persistenceFailed = true;
+      const dbMsg = dbErr instanceof Error ? dbErr.message : 'Database write failure';
+      console.error(`[PERSISTENCE ERROR] User: ${user.uid.slice(0, 8)}... | Error: ${dbMsg}`);
+    }
+
+    // 5. Handle Persistence Failure Explicitly
+    if (persistenceFailed || !persistedInteraction) {
+      res.status(500).json({
+        error: 'Your AI reflection was generated, but saving to your ThoughtVault failed. Please use Retry Save.',
+        code: 'DATABASE_PERSISTENCE_FAILED',
+        pendingRecord: {
+          threadId: targetThreadId,
+          clientInteractionId: clientInteractionId || `int_${Date.now()}`,
+          userPrompt: prompt,
+          geminiResponse: aiResult.text,
+          insights: aiResult.insights,
+          modelMetadata: {
+            modelUsed: aiResult.modelUsed,
+            fallbackUsed: aiResult.fallbackUsed,
+            attemptsCount: aiResult.attemptsCount,
+            latencyMs: aiResult.latencyMs,
+          },
+          failedAt: new Date().toISOString(),
+        }
+      });
+      return;
+    }
+
+    // 6. Confirmed Success Response
     res.status(200).json({
       success: true,
       data: {
         userPrompt: prompt,
-        geminiResponse: result.text,
-        insights: result.insights,
+        geminiResponse: aiResult.text,
+        insights: aiResult.insights,
         modelMetadata: {
-          modelUsed: result.modelUsed,
-          fallbackUsed: result.fallbackUsed,
-          attemptsCount: result.attemptsCount,
-          latencyMs: result.latencyMs,
+          modelUsed: aiResult.modelUsed,
+          fallbackUsed: aiResult.fallbackUsed,
+          attemptsCount: aiResult.attemptsCount,
+          latencyMs: aiResult.latencyMs,
         },
-        timestamp: new Date().toISOString(),
+        threadId: targetThreadId,
+        interactionId: persistedInteraction.id,
+        turnIndex: persistedInteraction.turnIndex,
+        persistence: {
+          status: 'persisted',
+          savedAt: persistedInteraction.createdAt,
+          interactionId: persistedInteraction.id,
+          threadId: targetThreadId,
+        },
+        timestamp: persistedInteraction.createdAt,
       },
     });
   } catch (err: unknown) {
@@ -194,6 +446,49 @@ router.post('/chat', verifyFirebaseToken, async (req: AuthenticatedRequest, res:
     res.status(503).json({
       error: 'The AI Reflection companion is temporarily unavailable. Your draft has been preserved. Please try again in a moment.',
       code: 'AI_SERVICE_UNAVAILABLE'
+    });
+  }
+});
+
+/**
+ * POST /api/journal/retry-save
+ * Explicit recovery endpoint for persisting previously generated AI reflections
+ * without burning another Gemini API call
+ */
+router.post('/retry-save', verifyFirebaseToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const user = req.user;
+  if (!user || !user.uid) {
+    res.status(401).json({ error: 'Unauthorized: Missing user authentication context.', code: 'UNAUTHORIZED' });
+    return;
+  }
+
+  const body = (req.body && typeof req.body === 'object') ? (req.body as RetrySaveRequestBody) : null;
+  if (!body || !body.threadId || !body.userPrompt || !body.geminiResponse) {
+    res.status(400).json({
+      error: 'Invalid retry save payload: threadId, userPrompt, and geminiResponse are required.',
+      code: 'INVALID_RETRY_PAYLOAD'
+    });
+    return;
+  }
+
+  try {
+    const persisted = await retrySaveInteraction(user.uid, body);
+    res.status(200).json({
+      success: true,
+      interaction: persisted,
+      persistence: {
+        status: 'persisted',
+        savedAt: persisted.createdAt,
+        interactionId: persisted.id,
+        threadId: body.threadId,
+      },
+    });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Retry save failed';
+    console.error(`[RETRY SAVE ERROR] User: ${user.uid.slice(0, 8)}... | Error: ${errorMsg}`);
+    res.status(500).json({
+      error: 'Failed to persist journal entry on retry.',
+      code: 'RETRY_PERSISTENCE_FAILED'
     });
   }
 });
