@@ -13,8 +13,12 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import journalRouter from './server/routes/journal';
+import { validateServerConfig, redactSecrets } from './server/lib/config';
 
 async function startServer() {
+  // Validate required runtime secrets on boot (Fail-safe verification)
+  validateServerConfig();
+
   const app = express();
   const PORT = 3000;
 
@@ -80,7 +84,7 @@ async function startServer() {
   // Global uncaught error handler
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     const errorMsg = err instanceof Error ? err.message : 'Internal Server Error';
-    console.error(`[UNCAUGHT ERROR] Path: ${req.path} | Error: ${errorMsg}`);
+    console.error(`[UNCAUGHT ERROR] Path: ${req.path} | Error: ${redactSecrets(errorMsg)}`);
     res.status(500).json({
       error: 'An unexpected internal error occurred. Please try again.',
       code: 'INTERNAL_SERVER_ERROR'

@@ -10,6 +10,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
+import { getConfiguredGeminiApiKey, redactSecrets } from '../lib/config';
 import type { ConversationTurn, JournalReflectionInsights } from '../types';
 
 // The 4-tier model fallback ladder required by the Security Constitution
@@ -25,11 +26,7 @@ let aiClient: GoogleGenAI | null = null;
 function getAiClient(): GoogleGenAI {
   if (aiClient) return aiClient;
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY environment variable is missing on the server.');
-  }
-
+  const apiKey = getConfiguredGeminiApiKey();
   aiClient = new GoogleGenAI({ apiKey });
   return aiClient;
 }
@@ -189,5 +186,6 @@ export async function generateContentWithFallback({
   // All configured models failed or non-recoverable error
   console.error('[GEMINI CRITICAL] All configured fallback models failed to generate reflection.');
   const errorMsg = lastError instanceof Error ? lastError.message : 'Unknown AI generation failure';
-  throw new Error(`AI reflection service temporarily unavailable: ${errorMsg}`);
+  const sanitizedMsg = redactSecrets(errorMsg);
+  throw new Error(`AI reflection service temporarily unavailable: ${sanitizedMsg}`);
 }

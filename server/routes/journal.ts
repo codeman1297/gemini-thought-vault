@@ -14,6 +14,7 @@
 import { Router, type Response } from 'express';
 import { verifyFirebaseToken } from '../middleware/auth';
 import { generateContentWithFallback } from '../services/gemini';
+import { redactSecrets } from '../lib/config';
 import { 
   listUserThreads, 
   getUserThread, 
@@ -441,7 +442,7 @@ router.post('/chat', verifyFirebaseToken, async (req: AuthenticatedRequest, res:
     });
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown AI service failure';
-    console.error(`[JOURNAL ERROR] User: ${user.uid.slice(0, 8)}... | Error: ${errorMsg}`);
+    console.error(`[JOURNAL ERROR] User: ${user.uid.slice(0, 8)}... | Error: ${redactSecrets(errorMsg)}`);
 
     res.status(503).json({
       error: 'The AI Reflection companion is temporarily unavailable. Your draft has been preserved. Please try again in a moment.',
