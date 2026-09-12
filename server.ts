@@ -20,7 +20,10 @@ async function startServer() {
   validateServerConfig();
 
   const app = express();
-  const PORT = 3000;
+  // Runtime-safe port configuration:
+  // In the AI Studio container, the internal nginx reverse proxy exclusively targets port 3000 (detected via APPLET_ID).
+  // In standalone Cloud Run production, Cloud Run dynamically provisions PORT (default 8080 or custom --port value).
+  const PORT = process.env.APPLET_ID ? 3000 : (Number(process.env.PORT) || 3000);
 
   // Security response headers
   app.use((req: Request, res: Response, next: NextFunction) => {
