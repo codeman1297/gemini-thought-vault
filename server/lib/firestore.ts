@@ -34,7 +34,8 @@ function getAdminApp(): App {
 export function getDb(): Firestore {
   if (dbInstance) return dbInstance;
   const app = getAdminApp();
-  dbInstance = getFirestore(app);
+  const databaseId = process.env.FIRESTORE_DATABASE_ID || '(default)';
+  dbInstance = getFirestore(app, databaseId);
   // Configure Firestore settings if needed
   try {
     dbInstance.settings({ ignoreUndefinedProperties: true });
