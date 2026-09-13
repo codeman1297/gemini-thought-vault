@@ -226,6 +226,10 @@ service cloud.firestore {
         match /interactions/{interactionId} {
           allow read, write: if request.auth != null && request.auth.uid == userId;
         }
+
+        match /reflections/{reflectionId} {
+          allow read, write: if request.auth != null && request.auth.uid == userId;
+        }
       }
     }
   }
@@ -234,7 +238,29 @@ service cloud.firestore {
 
 ---
 
-## 9. Security Verification & Test Plan
+## 9. AI Reflection Engine & Schema Validation (Milestone 8)
+
+The AI Reflection Engine generates private, structured reflections for every authorized journal thought:
+
+1. **Structured Reflection Schema (`AIReflectionInsight`)**:
+   - `summary`: High-level synopsis of user thoughts (max 500 chars).
+   - `themes`: Discovered emotional/conceptual patterns (array of max 5 strings, max 40 chars each).
+   - `actionItems`: Gentle, actionable self-directed exploration prompts (max 5 items, max 120 chars each).
+   - `openQuestions`: Contemplative questions for deeper self-awareness (max 3 items, max 160 chars each).
+2. **Strict Defensive Sanitization**:
+   - Model outputs are parsed and validated through `validateAndSanitizeReflection()`.
+   - Malformed, empty, or oversized outputs are defensively sanitized before Firestore writes.
+   - User inputs are encapsulated in `<user_reflection>` boundaries to defend against prompt injection.
+3. **Dedicated Subcollection Storage**:
+   - Persisted both inside the interaction document (`/users/{uid}/threads/{threadId}/interactions/{id}`) and as a dedicated reflection document (`/users/{uid}/threads/{threadId}/reflections/{id}`).
+4. **Automated Testing**:
+   ```bash
+   npm test
+   ```
+
+---
+
+## 10. Security Verification & Test Plan
 
 | Test Case | Method | Expected Outcome |
 | :--- | :--- | :--- |
@@ -244,9 +270,10 @@ service cloud.firestore {
 | **Secret Manager Ingestion** | Cloud Run boot logs | Verified key presence; zero secret chars logged |
 | **Log Sanitization** | Deliberate exception with key pattern | Log scrubs key to `[REDACTED_API_KEY]` |
 | **Persistence Recovery** | Network glitch during Firestore save | State kept in UI; "Retry Save" succeeds |
+| **AI Schema Validation** | `npm test` unit & security test suite | Validates bounds, types, and injection defense |
 
 ---
 
-## 10. License
+## 11. License
 
 MIT License. Designed with security, privacy, and craftsmanship.

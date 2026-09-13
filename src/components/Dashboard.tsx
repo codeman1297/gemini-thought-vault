@@ -36,7 +36,9 @@ import {
   Database,
   CloudCheck,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  FileText,
+  ListChecks
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { 
@@ -410,9 +412,9 @@ export function Dashboard() {
                             {t.turnCount} {t.turnCount === 1 ? 'turn' : 'turns'}
                           </span>
                         </div>
-                        {t.previewSnippet && (
+                        {(t.lastSummary || t.previewSnippet) && (
                           <p className="text-[11px] text-neutral-400 line-clamp-2 leading-relaxed mb-1.5">
-                            {t.previewSnippet}
+                            {t.lastSummary || t.previewSnippet}
                           </p>
                         )}
                         <div className="flex items-center justify-between text-[10px] text-neutral-500">
@@ -581,20 +583,31 @@ export function Dashboard() {
                           </div>
                         </div>
 
-                        {/* Reflection Content */}
+                        {/* 1. Reflection Summary */}
+                        {interaction.insights.summary && (
+                          <div className="p-3 rounded-xl bg-indigo-950/20 border border-indigo-900/40 text-xs text-indigo-200/90 leading-relaxed flex items-start gap-2.5">
+                            <FileText className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+                            <div className="space-y-0.5">
+                              <span className="font-semibold text-indigo-300 block text-[11px] uppercase tracking-wider">Reflection Summary</span>
+                              <p className="text-neutral-300">{interaction.insights.summary}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 2. Conversational Reflection Content */}
                         <div className="text-sm text-neutral-300 whitespace-pre-wrap leading-relaxed pl-3 border-l-2 border-indigo-500/40">
                           {interaction.geminiResponse}
                         </div>
 
-                        {/* Extracted Core Themes */}
-                        {interaction.insights.coreThemes.length > 0 && (
+                        {/* 3. Extracted Core Themes */}
+                        {((interaction.insights.themes && interaction.insights.themes.length > 0) || (interaction.insights.coreThemes && interaction.insights.coreThemes.length > 0)) && (
                           <div className="pt-2">
                             <p className="text-[11px] font-medium text-neutral-400 flex items-center gap-1 mb-2">
                               <Tag className="w-3 h-3 text-indigo-400" />
-                              Core Themes
+                              Identified Themes
                             </p>
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              {interaction.insights.coreThemes.map((theme, i) => (
+                              {(interaction.insights.themes && interaction.insights.themes.length > 0 ? interaction.insights.themes : interaction.insights.coreThemes).map((theme, i) => (
                                 <span
                                   key={i}
                                   className="px-2.5 py-1 rounded-lg text-xs bg-indigo-950/40 border border-indigo-800/50 text-indigo-300"
@@ -606,12 +619,30 @@ export function Dashboard() {
                           </div>
                         )}
 
-                        {/* Open Questions to Contemplate */}
+                        {/* 4. Action Items & Self-Directed Exploration */}
+                        {interaction.insights.actionItems && interaction.insights.actionItems.length > 0 && (
+                          <div className="pt-2 border-t border-neutral-800/60">
+                            <p className="text-[11px] font-medium text-neutral-400 flex items-center gap-1 mb-2">
+                              <ListChecks className="w-3.5 h-3.5 text-emerald-400" />
+                              Possible Action Items & Exploration
+                            </p>
+                            <ul className="space-y-1.5 text-xs text-neutral-300">
+                              {interaction.insights.actionItems.map((action, i) => (
+                                <li key={i} className="flex items-start gap-2">
+                                  <span className="text-emerald-400 font-bold select-none">&bull;</span>
+                                  <span>{action}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* 5. Open Questions to Contemplate */}
                         {interaction.insights.openQuestions.length > 0 && (
                           <div className="pt-2 border-t border-neutral-800/60">
                             <p className="text-[11px] font-medium text-neutral-400 flex items-center gap-1 mb-2">
                               <HelpCircle className="w-3 h-3 text-indigo-400" />
-                              Questions to Contemplate
+                              Open Questions to Contemplate
                             </p>
                             <ul className="space-y-1.5 text-xs text-neutral-300">
                               {interaction.insights.openQuestions.map((q, i) => (

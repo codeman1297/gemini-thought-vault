@@ -48,6 +48,7 @@ export async function listUserThreads(uid: string, limitCount = 30): Promise<Jou
       coreThemes: Array.isArray(data.coreThemes) ? data.coreThemes : [],
       createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate().toISOString() : (data.createdAt || new Date().toISOString()),
       updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : (data.updatedAt || new Date().toISOString()),
+      lastSummary: typeof data.lastSummary === 'string' ? data.lastSummary : undefined,
       lastInteractionId: data.lastInteractionId,
       status: data.status === 'archived' ? 'archived' : 'active',
     });
@@ -84,6 +85,7 @@ export async function getUserThread(uid: string, threadId: string): Promise<Jour
     coreThemes: Array.isArray(data.coreThemes) ? data.coreThemes : [],
     createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate().toISOString() : (data.createdAt || new Date().toISOString()),
     updatedAt: data.updatedAt instanceof Timestamp ? data.updatedAt.toDate().toISOString() : (data.updatedAt || new Date().toISOString()),
+    lastSummary: typeof data.lastSummary === 'string' ? data.lastSummary : undefined,
     lastInteractionId: data.lastInteractionId,
     status: data.status === 'archived' ? 'archived' : 'active',
   };
@@ -111,6 +113,10 @@ export async function getThreadInteractions(
   const interactions: JournalInteraction[] = [];
   for (const doc of snapshot.docs) {
     const data = doc.data();
+    const themes = Array.isArray(data.insights?.themes) 
+      ? data.insights.themes 
+      : (Array.isArray(data.insights?.coreThemes) ? data.insights.coreThemes : []);
+
     interactions.push({
       id: doc.id,
       threadId,
@@ -119,7 +125,10 @@ export async function getThreadInteractions(
       userPrompt: data.userPrompt || '',
       geminiResponse: data.geminiResponse || '',
       insights: {
-        coreThemes: Array.isArray(data.insights?.coreThemes) ? data.insights.coreThemes : [],
+        summary: typeof data.insights?.summary === 'string' ? data.insights.summary : '',
+        themes,
+        coreThemes: themes,
+        actionItems: Array.isArray(data.insights?.actionItems) ? data.insights.actionItems : [],
         openQuestions: Array.isArray(data.insights?.openQuestions) ? data.insights.openQuestions : [],
       },
       modelMetadata: {
@@ -179,6 +188,10 @@ export async function checkInteractionExists(
   const data = doc.data();
   if (!data) return null;
 
+  const themes = Array.isArray(data.insights?.themes) 
+    ? data.insights.themes 
+    : (Array.isArray(data.insights?.coreThemes) ? data.insights.coreThemes : []);
+
   return {
     id: doc.id,
     threadId,
@@ -187,7 +200,10 @@ export async function checkInteractionExists(
     userPrompt: data.userPrompt || '',
     geminiResponse: data.geminiResponse || '',
     insights: {
-      coreThemes: Array.isArray(data.insights?.coreThemes) ? data.insights.coreThemes : [],
+      summary: typeof data.insights?.summary === 'string' ? data.insights.summary : '',
+      themes,
+      coreThemes: themes,
+      actionItems: Array.isArray(data.insights?.actionItems) ? data.insights.actionItems : [],
       openQuestions: Array.isArray(data.insights?.openQuestions) ? data.insights.openQuestions : [],
     },
     modelMetadata: {
@@ -284,6 +300,14 @@ export async function persistInteraction({
 
   const now = Timestamp.now();
 
+  const themes = Array.isArray(insights.themes) && insights.themes.length > 0
+    ? insights.themes.slice(0, 5)
+    : (Array.isArray(insights.coreThemes) ? insights.coreThemes.slice(0, 5) : ['Personal Reflection']);
+
+  const summary = typeof insights.summary === 'string' ? insights.summary.slice(0, 500) : '';
+  const actionItems = Array.isArray(insights.actionItems) ? insights.actionItems.slice(0, 5) : [];
+  const openQuestions = Array.isArray(insights.openQuestions) ? insights.openQuestions.slice(0, 3) : [];
+
   const rawInteractionPayload = {
     id: interactionId,
     threadId,
@@ -292,8 +316,11 @@ export async function persistInteraction({
     userPrompt,
     geminiResponse,
     insights: {
-      coreThemes: Array.isArray(insights.coreThemes) ? insights.coreThemes.slice(0, 5) : [],
-      openQuestions: Array.isArray(insights.openQuestions) ? insights.openQuestions.slice(0, 3) : [],
+      summary,
+      themes,
+      coreThemes: themes,
+      actionItems,
+      openQuestions,
     },
     modelMetadata: {
       modelUsed: modelMetadata.modelUsed,
@@ -311,16 +338,31 @@ export async function persistInteraction({
   const batch = db.batch();
   batch.set(interactionRef, interactionPayload, { merge: true });
 
+  // Persist dedicated reflection record associated with interaction & thread
+  const reflectionRef = db.doc(`users/${uid}/threads/${threadId}/reflections/${interactionId}`);
+  batch.set(reflectionRef, stripUndefined({
+    id: interactionId,
+    interactionId,
+    threadId,
+    userId: uid,
+    summary,
+    themes,
+    actionItems,
+    openQuestions,
+    createdAt: now,
+  }), { merge: true });
+
   // Update parent thread metadata
   const existingThread = await getUserThread(uid, threadId);
   const updatedThemes = Array.from(
-    new Set([...(existingThread?.coreThemes || []), ...(insights.coreThemes || [])])
+    new Set([...(existingThread?.coreThemes || []), ...themes])
   ).slice(0, 10);
 
   const threadUpdatePayload = stripUndefined({
     turnCount: turnIndex + 1,
     updatedAt: now,
     lastInteractionId: interactionId,
+    lastSummary: summary ? summary.slice(0, 200) : undefined,
     coreThemes: updatedThemes,
     // If opening turn and thread had empty preview, update previewSnippet
     ...(turnIndex === 0 ? { previewSnippet: userPrompt.slice(0, 150) } : {}),

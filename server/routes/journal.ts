@@ -14,6 +14,7 @@
 import { Router, type Response } from 'express';
 import { verifyFirebaseToken } from '../middleware/auth';
 import { generateContentWithFallback } from '../services/gemini';
+import { validateAndSanitizeReflection } from '../services/reflectionEngine';
 import { redactSecrets } from '../lib/config';
 import { 
   listUserThreads, 
@@ -473,7 +474,17 @@ router.post('/retry-save', verifyFirebaseToken, async (req: AuthenticatedRequest
   }
 
   try {
-    const persisted = await retrySaveInteraction(user.uid, body);
+    // Validate and defensively sanitize insight fields before retrying persistence
+    const rawReflectionObject = (body.insights && typeof body.insights === 'object')
+      ? { ...body.insights, reflection: body.geminiResponse }
+      : { reflection: body.geminiResponse };
+
+    const { insights: sanitizedInsights } = validateAndSanitizeReflection(rawReflectionObject, body.userPrompt);
+
+    const persisted = await retrySaveInteraction(user.uid, {
+      ...body,
+      insights: sanitizedInsights,
+    });
     res.status(200).json({
       success: true,
       interaction: persisted,

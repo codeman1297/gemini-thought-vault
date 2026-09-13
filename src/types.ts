@@ -8,10 +8,15 @@ export interface ConversationTurn {
   text: string;
 }
 
-export interface JournalReflectionInsights {
+export interface AIReflectionInsight {
+  summary: string;
+  themes: string[];
   coreThemes: string[];
+  actionItems: string[];
   openQuestions: string[];
 }
+
+export type JournalReflectionInsights = AIReflectionInsight;
 
 export interface ModelMetadata {
   modelUsed: string;
@@ -34,6 +39,7 @@ export interface JournalThread {
   previewSnippet: string;
   turnCount: number;
   coreThemes: string[];
+  lastSummary?: string;
   createdAt: string;
   updatedAt: string;
   lastInteractionId?: string;

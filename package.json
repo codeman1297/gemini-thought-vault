@@ -9,6 +9,7 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
+    "test": "tsx server/test/reflectionEngine.test.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

@@ -49,6 +49,19 @@ service cloud.firestore {
             && request.resource.data.userId == resource.data.userId;
           allow delete: if isOwner(userId);
         }
+
+        // Reflection subcollection (AI Reflection Engine Insights)
+        match /reflections/{reflectionId} {
+          allow read: if isOwner(userId);
+          allow create: if isOwner(userId)
+            && isValidId(reflectionId)
+            && request.resource.data.userId == userId
+            && request.resource.data.summary is string
+            && request.resource.data.summary.size() <= 1000;
+          allow update: if isOwner(userId)
+            && request.resource.data.userId == resource.data.userId;
+          allow delete: if isOwner(userId);
+        }
       }
     }
   }
