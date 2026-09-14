@@ -9,7 +9,7 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "test": "tsx server/test/reflectionEngine.test.ts",
+    "test": "tsx server/test/reflectionEngine.test.ts && tsx server/test/evolutionEngine.test.ts && tsx server/test/askSchema.test.ts && tsx server/test/askRetrieval.test.ts && tsx server/test/askSynthesis.test.ts && tsx server/test/askRoute.test.ts && tsx server/test/askCache.test.ts && tsx server/test/personalInsights.test.ts && tsx server/test/productionHardening.test.ts && tsx server/test/firebaseFirestoreAudit.test.ts && tsx server/test/apiHardening.test.ts && tsx server/test/reliabilityObservability.test.ts && tsx server/test/e2eProductionVerification.test.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -27,13 +27,15 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
+    "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3",
-    "@types/express": "^4.17.21"
+    "vite": "^6.2.3"
   }
 }

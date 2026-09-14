@@ -14,7 +14,10 @@ import type {
   JournalInteraction, 
   JournalReflectionData, 
   PendingPersistenceRecord,
-  PersistenceStatus
+  PersistenceStatus,
+  ThoughtEvolutionDocument,
+  SupportingEvidenceResponse,
+  PersonalInsightsResponse
 } from '../types';
 
 async function getAuthToken(): Promise<string> {
@@ -190,3 +193,124 @@ export async function retrySaveInteraction(pendingRecord: {
     persistence: payload.persistence,
   };
 }
+
+/**
+ * Retrieves the latest Thought Evolution report for the authenticated user.
+ */
+export async function getLatestThoughtEvolution(): Promise<ThoughtEvolutionDocument | null> {
+  const token = await getAuthToken();
+
+  const response = await fetch('/api/journal/evolution', {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || payload.error || 'Failed to load Thought Evolution report.');
+  }
+
+  return payload.evolution || null;
+}
+
+/**
+ * Triggers a Thought Evolution synthesis.
+ */
+export async function generateThoughtEvolution(forceRefresh: boolean = false): Promise<{
+  evolution: ThoughtEvolutionDocument;
+  cached: boolean;
+}> {
+  const token = await getAuthToken();
+
+  const response = await fetch('/api/journal/evolution/generate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({ forceRefresh }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (response.status === 409) {
+    const err = new Error(payload.message || 'Thought Evolution analysis is already in progress.');
+    (err as unknown as { code: string }).code = 'ANALYSIS_IN_PROGRESS';
+    throw err;
+  }
+
+  if (response.status === 429) {
+    throw new Error(payload.message || 'Rate limit exceeded. Please wait a moment before generating again.');
+  }
+
+  if (!response.ok) {
+    throw new Error(payload.message || payload.error || 'Failed to synthesize Thought Evolution.');
+  }
+
+  return {
+    evolution: payload.evolution,
+    cached: payload.cached ?? false,
+  };
+}
+
+/**
+ * On-demand dereferencing of supporting interaction evidence.
+ */
+export async function getEvolutionSupportingEvidence(
+  threadId: string,
+  interactionId: string
+): Promise<SupportingEvidenceResponse> {
+  const token = await getAuthToken();
+
+  const response = await fetch(
+    `/api/journal/evolution/evidence/${encodeURIComponent(threadId)}/${encodeURIComponent(interactionId)}`,
+    {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    }
+  );
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || payload.error || 'Failed to retrieve supporting thought.');
+  }
+
+  return payload.evidence || {
+    available: false,
+    interactionId,
+    threadId,
+    message: 'This supporting thought is no longer available.',
+  };
+}
+
+/**
+ * Fetches Personal Journal Insights (Milestone 10.6).
+ * Scoped strictly to authenticated user's Firebase token.
+ */
+export async function getPersonalInsights(forceRefresh: boolean = false): Promise<PersonalInsightsResponse> {
+  const token = await getAuthToken();
+
+  const url = `/api/journal/insights${forceRefresh ? '?forceRefresh=true' : ''}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (response.status === 429) {
+    throw new Error(payload.error || 'Rate limit exceeded. Please wait a moment before requesting insights again.');
+  }
+
+  if (!response.ok) {
+    throw new Error(payload.error || 'Failed to retrieve personal journal insights.');
+  }
+
+  return payload;
+}
+

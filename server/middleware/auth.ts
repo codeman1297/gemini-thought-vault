@@ -16,6 +16,17 @@ import type { AuthenticatedRequest } from '../types';
 
 let adminApp: App | null = null;
 
+export type TokenVerifier = (idToken: string) => Promise<{ uid: string; email?: string | null }>;
+let customTokenVerifier: TokenVerifier | null = null;
+
+/**
+ * Test utility: permits injecting a custom token verifier in unit tests.
+ * In production, remains null so auth.verifyIdToken is strictly authoritative.
+ */
+export function setCustomTokenVerifierForTesting(verifier: TokenVerifier | null): void {
+  customTokenVerifier = verifier;
+}
+
 function getAdminApp(): App {
   if (adminApp) return adminApp;
 
@@ -48,6 +59,14 @@ export async function verifyFirebaseToken(
     return;
   }
 
+  if (typeof authHeader !== 'string') {
+    res.status(401).json({
+      error: 'Unauthorized: Authorization header must be a single string.',
+      code: 'AUTH_INVALID_HEADER'
+    });
+    return;
+  }
+
   if (!authHeader.startsWith('Bearer ')) {
     res.status(401).json({
       error: 'Unauthorized: Authorization scheme must be Bearer.',
@@ -66,9 +85,14 @@ export async function verifyFirebaseToken(
   }
 
   try {
-    const app = getAdminApp();
-    const auth = getAuth(app);
-    const decodedToken = await auth.verifyIdToken(idToken);
+    let decodedToken: { uid: string; email?: string | null } | null = null;
+    if (customTokenVerifier) {
+      decodedToken = await customTokenVerifier(idToken);
+    } else {
+      const app = getAdminApp();
+      const auth = getAuth(app);
+      decodedToken = await auth.verifyIdToken(idToken);
+    }
 
     if (!decodedToken || !decodedToken.uid) {
       res.status(401).json({
@@ -113,3 +137,5 @@ export async function verifyFirebaseToken(
     });
   }
 }
+
+export const requireAuth = verifyFirebaseToken;

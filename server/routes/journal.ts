@@ -34,42 +34,25 @@ import type {
   JournalInteraction
 } from '../types';
 
+import { BoundedRateLimiter } from '../lib/rateLimit';
+
 const router = Router();
 
-// In-memory sliding window rate-limiter: max 15 requests per minute per UID
-const userRateLimits = new Map<string, number[]>();
-const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMIT_MAX_REQUESTS = 15;
+// Bounded in-memory sliding window rate-limiter: max 15 requests per minute per UID
+export const journalRateLimiter = new BoundedRateLimiter({
+  name: 'journal-chat',
+  maxRequests: 15,
+  windowMs: 60 * 1000,
+  maxKeys: 5000,
+});
 
-function checkRateLimit(uid: string): boolean {
-  const now = Date.now();
-  const timestamps = userRateLimits.get(uid) || [];
-  
-  // Prune expired timestamps
-  const activeTimestamps = timestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
-  
-  if (activeTimestamps.length >= RATE_LIMIT_MAX_REQUESTS) {
-    userRateLimits.set(uid, activeTimestamps);
-    return false;
-  }
-
-  activeTimestamps.push(now);
-  userRateLimits.set(uid, activeTimestamps);
-  return true;
+export function checkRateLimit(uid: string): boolean {
+  return journalRateLimiter.check(uid);
 }
 
-// Clean up stale rate limits every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [uid, timestamps] of userRateLimits.entries()) {
-    const active = timestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
-    if (active.length === 0) {
-      userRateLimits.delete(uid);
-    } else {
-      userRateLimits.set(uid, active);
-    }
-  }
-}, 5 * 60 * 1000);
+export function resetJournalRateLimits(): void {
+  journalRateLimiter.reset();
+}
 
 /**
  * GET /api/journal/threads

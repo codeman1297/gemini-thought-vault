@@ -43,6 +43,29 @@ interface FallbackResult {
   latencyMs: number;
 }
 
+export const GEMINI_ATTEMPT_TIMEOUT_MS = 25000; // 25s bounded attempt
+
+/**
+ * Executes an asynchronous operation bounded by a timeout.
+ */
+export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operationName: string): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`${operationName} timed out after ${timeoutMs}ms`);
+      (err as unknown as { status: number }).status = 504;
+      reject(err);
+    }, timeoutMs);
+    if (timer.unref) {
+      timer.unref();
+    }
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 function isRecoverableError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
 
@@ -50,10 +73,10 @@ function isRecoverableError(error: unknown): boolean {
   const errMsg = 'message' in error && typeof error.message === 'string' 
     ? error.message.toLowerCase() 
     : '';
-  const status = 'status' in error ? Number(error.status) : 0;
+  const status = 'status' in error ? Number((error as { status?: unknown }).status) : 0;
 
-  // Recoverable error codes: 429, 503, 404, 500
-  if ([429, 503, 404, 500].includes(status)) {
+  // Recoverable error codes: 429, 503, 404, 500, 504 (timeout)
+  if ([429, 503, 404, 500, 504].includes(status)) {
     return true;
   }
 
@@ -62,18 +85,118 @@ function isRecoverableError(error: unknown): boolean {
     errString.includes('503') ||
     errString.includes('404') ||
     errString.includes('500') ||
+    errString.includes('504') ||
     errString.includes('resource_exhausted') ||
     errString.includes('unavailable') ||
     errString.includes('overloaded') ||
     errString.includes('not found') ||
     errString.includes('internal error') ||
+    errString.includes('timed out') ||
+    errString.includes('timeout') ||
     errMsg.includes('quota') ||
-    errMsg.includes('rate limit')
+    errMsg.includes('rate limit') ||
+    errMsg.includes('timed out')
   );
 }
 
+export interface StructuredFallbackResult<T> {
+  data: T;
+  rawText: string;
+  modelUsed: string;
+  fallbackUsed: boolean;
+  attemptsCount: number;
+  latencyMs: number;
+}
+
 /**
- * Reusable fallback helper mandated by Constitution Section 14
+ * Reusable Structured Generation Gateway across all AI features (Milestones 8 & 9)
+ * Encapsulates the constitution-mandated 4-tier model ladder, recoverable error detection,
+ * retry telemetry, and privacy-first error redaction.
+ */
+export async function generateStructuredContentWithFallback<T>({
+  contents,
+  systemInstruction,
+  temperature = 0.7,
+  validator,
+}: {
+  contents: Array<{ role: string; parts: Array<{ text: string }> }>;
+  systemInstruction: string;
+  temperature?: number;
+  validator: (rawJson: unknown) => T;
+}): Promise<StructuredFallbackResult<T>> {
+  const startTime = Date.now();
+  const ai = getAiClient();
+  let lastError: unknown = null;
+
+  for (let i = 0; i < MODEL_FALLBACK_LADDER.length; i++) {
+    const model = MODEL_FALLBACK_LADDER[i];
+    const attemptStartTime = Date.now();
+
+    try {
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            systemInstruction,
+            responseMimeType: 'application/json',
+            temperature,
+          },
+        }),
+        GEMINI_ATTEMPT_TIMEOUT_MS,
+        `Gemini attempt (${model})`
+      );
+
+      const rawText = response.text || '';
+      const latencyMs = Date.now() - startTime;
+
+      // Parse JSON safely
+      let rawJson: unknown = null;
+      try {
+        rawJson = JSON.parse(rawText);
+      } catch {
+        rawJson = { raw: rawText };
+      }
+
+      // Execute caller's domain-specific validator
+      const validatedData = validator(rawJson);
+
+      const fallbackUsed = i > 0;
+      if (fallbackUsed) {
+        console.info(`[GEMINI FALLBACK SUCCESS] Succeeded on fallback model: ${model} (attempt ${i + 1})`);
+      }
+
+      return {
+        data: validatedData,
+        rawText,
+        modelUsed: model,
+        fallbackUsed,
+        attemptsCount: i + 1,
+        latencyMs,
+      };
+    } catch (err: unknown) {
+      lastError = err;
+      const attemptDuration = Date.now() - attemptStartTime;
+
+      if (isRecoverableError(err) && i < MODEL_FALLBACK_LADDER.length - 1) {
+        console.warn(
+          `[GEMINI FALLBACK] Model ${model} failed after ${attemptDuration}ms. Recovering with next model (${MODEL_FALLBACK_LADDER[i + 1]})...`
+        );
+        continue;
+      }
+
+      break;
+    }
+  }
+
+  console.error('[GEMINI CRITICAL] All configured fallback models failed to generate structured content.');
+  const errorMsg = lastError instanceof Error ? lastError.message : 'Unknown AI generation failure';
+  const sanitizedMsg = redactSecrets(errorMsg);
+  throw new Error(`AI service temporarily unavailable: ${sanitizedMsg}`);
+}
+
+/**
+ * Reusable fallback helper for Journal Reflections (Milestone 8)
  */
 export async function generateContentWithFallback({
   prompt,
@@ -82,9 +205,6 @@ export async function generateContentWithFallback({
   prompt: string;
   history?: ConversationTurn[];
 }): Promise<FallbackResult> {
-  const startTime = Date.now();
-  const ai = getAiClient();
-
   // Construct Gemini multi-turn content array with strict prompt boundary
   const contents = [];
 
@@ -102,70 +222,22 @@ export async function generateContentWithFallback({
     parts: [{ text: `<user_reflection>\n${prompt}\n</user_reflection>` }],
   });
 
-  let lastError: unknown = null;
+  const result = await generateStructuredContentWithFallback<{
+    reflection: string;
+    insights: JournalReflectionInsights;
+  }>({
+    contents,
+    systemInstruction: SYSTEM_INSTRUCTION,
+    temperature: 0.7,
+    validator: (rawJson) => validateAndSanitizeReflection(rawJson, prompt),
+  });
 
-  for (let i = 0; i < MODEL_FALLBACK_LADDER.length; i++) {
-    const model = MODEL_FALLBACK_LADDER[i];
-    const attemptStartTime = Date.now();
-
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          responseMimeType: 'application/json',
-          temperature: 0.7,
-        },
-      });
-
-      const rawText = response.text || '';
-      const latencyMs = Date.now() - startTime;
-
-      // Parse JSON output safely
-      let rawJson: unknown = null;
-      try {
-        rawJson = JSON.parse(rawText);
-      } catch {
-        // Fallback: If JSON parsing fails (e.g. malformed markdown formatting), wrap raw text
-        rawJson = { reflection: rawText };
-      }
-
-      // Explicit schema validation & sanitization via reflectionEngine
-      const { reflection, insights } = validateAndSanitizeReflection(rawJson, prompt);
-
-      const fallbackUsed = i > 0;
-      if (fallbackUsed) {
-        console.info(`[GEMINI FALLBACK SUCCESS] Succeeded on fallback model: ${model} (attempt ${i + 1})`);
-      }
-
-      return {
-        text: reflection,
-        insights,
-        modelUsed: model,
-        fallbackUsed,
-        attemptsCount: i + 1,
-        latencyMs,
-      };
-    } catch (err: unknown) {
-      lastError = err;
-      const attemptDuration = Date.now() - attemptStartTime;
-
-      if (isRecoverableError(err) && i < MODEL_FALLBACK_LADDER.length - 1) {
-        console.warn(
-          `[GEMINI FALLBACK] Model ${model} failed after ${attemptDuration}ms. Recovering with next model (${MODEL_FALLBACK_LADDER[i + 1]})...`
-        );
-        continue;
-      }
-
-      // If non-recoverable (e.g. invalid API key) or final fallback reached, break
-      break;
-    }
-  }
-
-  // All configured models failed or non-recoverable error
-  console.error('[GEMINI CRITICAL] All configured fallback models failed to generate reflection.');
-  const errorMsg = lastError instanceof Error ? lastError.message : 'Unknown AI generation failure';
-  const sanitizedMsg = redactSecrets(errorMsg);
-  throw new Error(`AI reflection service temporarily unavailable: ${sanitizedMsg}`);
+  return {
+    text: result.data.reflection,
+    insights: result.data.insights,
+    modelUsed: result.modelUsed,
+    fallbackUsed: result.fallbackUsed,
+    attemptsCount: result.attemptsCount,
+    latencyMs: result.latencyMs,
+  };
 }

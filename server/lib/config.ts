@@ -24,7 +24,7 @@ export function redactSecrets(input: string): string {
   let sanitized = input;
 
   // 1. Redact Google API key format (e.g., AIzaSy...)
-  sanitized = sanitized.replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_API_KEY]');
+  sanitized = sanitized.replace(/AIza[0-9A-Za-z-_]{20,}/g, '[REDACTED_API_KEY]');
 
   // 2. Redact Bearer tokens
   sanitized = sanitized.replace(/Bearer\s+[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*/gi, 'Bearer [REDACTED_TOKEN]');

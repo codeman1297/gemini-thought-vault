@@ -10,7 +10,7 @@
  * 6. Zero journal text in server logs.
  */
 
-import { getDb, stripUndefined, Timestamp } from '../lib/firestore';
+import { getDb, stripUndefined, Timestamp, assertValidUid, assertValidId } from '../lib/firestore';
 import type { 
   JournalThread, 
   JournalInteraction, 
@@ -25,9 +25,7 @@ import type {
  * Path: /users/${uid}/threads
  */
 export async function listUserThreads(uid: string, limitCount = 30): Promise<JournalThread[]> {
-  if (!uid) {
-    throw new Error('Unauthorized: Missing authenticated UID context.');
-  }
+  assertValidUid(uid);
 
   const db = getDb();
   const threadsRef = db.collection(`users/${uid}/threads`);
@@ -64,6 +62,8 @@ export async function listUserThreads(uid: string, limitCount = 30): Promise<Jou
  */
 export async function getUserThread(uid: string, threadId: string): Promise<JournalThread | null> {
   if (!uid || !threadId) return null;
+  assertValidUid(uid);
+  assertValidId(threadId, 'threadId');
 
   const db = getDb();
   const docRef = db.doc(`users/${uid}/threads/${threadId}`);
@@ -102,6 +102,8 @@ export async function getThreadInteractions(
   maxCount = 50
 ): Promise<JournalInteraction[]> {
   if (!uid || !threadId) return [];
+  assertValidUid(uid);
+  assertValidId(threadId, 'threadId');
 
   const db = getDb();
   const interactionsRef = db.collection(`users/${uid}/threads/${threadId}/interactions`);
@@ -178,6 +180,9 @@ export async function checkInteractionExists(
   clientInteractionId: string
 ): Promise<JournalInteraction | null> {
   if (!uid || !threadId || !clientInteractionId) return null;
+  assertValidUid(uid);
+  assertValidId(threadId, 'threadId');
+  assertValidId(clientInteractionId, 'clientInteractionId');
 
   const db = getDb();
   const docRef = db.doc(`users/${uid}/threads/${threadId}/interactions/${clientInteractionId}`);
@@ -229,8 +234,9 @@ export async function createThread(
     threadId?: string;
   } = {}
 ): Promise<JournalThread> {
-  if (!uid) {
-    throw new Error('Unauthorized: Missing authenticated UID context.');
+  assertValidUid(uid);
+  if (options.threadId) {
+    assertValidId(options.threadId, 'threadId');
   }
 
   const db = getDb();
@@ -288,8 +294,10 @@ export async function persistInteraction({
   clientInteractionId?: string;
   turnIndex: number;
 }): Promise<JournalInteraction> {
-  if (!uid || !threadId) {
-    throw new Error('Missing required user or thread identifiers for persistence.');
+  assertValidUid(uid);
+  assertValidId(threadId, 'threadId');
+  if (clientInteractionId) {
+    assertValidId(clientInteractionId, 'clientInteractionId');
   }
 
   const db = getDb();

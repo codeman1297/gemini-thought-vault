@@ -52,10 +52,12 @@ import type {
   JournalInteraction, 
   PendingPersistenceRecord 
 } from '../types';
+import { ThoughtEvolutionView } from './ThoughtEvolutionView';
+import { PersonalInsightsView } from './PersonalInsightsView';
 
 export function Dashboard() {
   const { user, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'journal' | 'evolution' | 'ask'>('journal');
+  const [activeTab, setActiveTab] = useState<'journal' | 'evolution' | 'ask' | 'insights'>('journal');
   const [reflectionInput, setReflectionInput] = useState('');
   const [showFullUid, setShowFullUid] = useState(false);
   
@@ -349,6 +351,22 @@ export function Dashboard() {
           <Search className="w-4 h-4" />
           <span>Ask My Journal</span>
           <span className="px-1.5 py-0.2 rounded text-[10px] bg-neutral-800 text-neutral-400">Milestone 6</span>
+        </button>
+
+        <button
+          id="tab-insights"
+          onClick={() => setActiveTab('insights')}
+          className={`flex items-center gap-2 pb-3.5 px-3 text-sm font-medium border-b-2 transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'insights'
+              ? 'border-indigo-500 text-neutral-100'
+              : 'border-transparent text-neutral-400 hover:text-neutral-200'
+          }`}
+        >
+          <Sparkles className="w-4 h-4 text-indigo-400" />
+          <span>Personal Insights</span>
+          <span className="px-1.5 py-0.2 rounded text-[10px] bg-indigo-950 text-indigo-300 border border-indigo-800/50 font-mono">
+            M10.6
+          </span>
         </button>
       </div>
 
@@ -789,20 +807,9 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* Tab 2: Thought Evolution Scaffold */}
+      {/* Tab 2: Thought Evolution Engine (Milestone 9) */}
       {activeTab === 'evolution' && (
-        <div id="evolution-scaffold" className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-8 text-center space-y-4">
-          <div className="w-12 h-12 rounded-2xl bg-indigo-950/60 border border-indigo-800/60 flex items-center justify-center mx-auto text-indigo-400">
-            <Compass className="w-6 h-6" />
-          </div>
-          <h3 className="text-base font-semibold text-neutral-200">Thought Evolution Engine</h3>
-          <p className="text-sm text-neutral-400 max-w-md mx-auto leading-relaxed">
-            The original Thought Evolution engine analyzes patterns across your historical thoughts, recurring themes, and unresolved ideas.
-          </p>
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800 text-xs text-neutral-400">
-            <span>Scheduled for Milestone 6</span>
-          </div>
-        </div>
+        <ThoughtEvolutionView onNavigateToJournal={() => setActiveTab('journal')} />
       )}
 
       {/* Tab 3: Ask My Journal Scaffold */}
@@ -819,6 +826,17 @@ export function Dashboard() {
             <span>Scheduled for Milestone 6</span>
           </div>
         </div>
+      )}
+
+      {/* Tab 4: Personal Journal Insights (Milestone 10.6) */}
+      {activeTab === 'insights' && (
+        <PersonalInsightsView
+          onNavigateToJournal={() => setActiveTab('journal')}
+          onStartReflectionWithPrompt={(prompt) => {
+            setReflectionInput(prompt);
+            setActiveTab('journal');
+          }}
+        />
       )}
     </div>
   );

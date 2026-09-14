@@ -63,6 +63,32 @@ service cloud.firestore {
           allow delete: if isOwner(userId);
         }
       }
+
+      // Thought Evolution subcollection (Milestone 9)
+      match /evolution/{docId} {
+        // 'latest' document: Read-only for authenticated owner.
+        // Client writes are FORBIDDEN. Only Admin SDK writes this document.
+        allow read: if isOwner(userId) && docId == 'latest';
+        allow write: if false;
+
+        // 'lock' document: Completely hidden from direct browser access.
+        // Managed exclusively by server-side Admin SDK transactions.
+        allow read, write: if false;
+      }
+
+      // Ask My Journal Cache subcollection (Milestone 10.5)
+      match /ask_cache/{cacheId} {
+        // Completely hidden from direct browser access.
+        // Managed exclusively by backend Admin SDK with verified identity.
+        allow read, write: if false;
+      }
+
+      // Personal Journal Insights Cache subcollection (Milestone 10.6)
+      match /insight_cache/{cacheId} {
+        // Completely hidden from direct browser access.
+        // Managed exclusively by backend Admin SDK with verified identity.
+        allow read, write: if false;
+      }
     }
   }
 }

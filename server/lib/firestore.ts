@@ -63,6 +63,9 @@ export function stripUndefined<T>(obj: T): T {
   if (typeof obj === 'object' && !(obj instanceof Date) && !(obj instanceof Timestamp)) {
     const cleaned: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+        continue;
+      }
       if (value !== undefined) {
         cleaned[key] = stripUndefined(value);
       }
@@ -71,6 +74,32 @@ export function stripUndefined<T>(obj: T): T {
   }
 
   return obj;
+}
+
+/**
+ * Validates that a user ID conforms to secure Firestore path requirements.
+ * Rejects empty, whitespace-only, traversal-prone, or excessively long UIDs.
+ */
+export function assertValidUid(uid: unknown): asserts uid is string {
+  if (!uid || typeof uid !== 'string' || uid.trim().length === 0) {
+    throw new Error('Unauthorized: Missing authenticated UID context.');
+  }
+  if (uid.includes('/') || uid.includes('..') || uid.trim() !== uid || uid.length > 128) {
+    throw new Error('Unauthorized: Invalid UID format.');
+  }
+}
+
+/**
+ * Validates that a document/entity identifier is safe for Firestore path composition.
+ * Rejects traversal sequences, slashes, or abnormal length strings.
+ */
+export function assertValidId(id: unknown, label = 'Identifier'): asserts id is string {
+  if (!id || typeof id !== 'string' || id.trim().length === 0) {
+    throw new Error(`Invalid ${label}: must be a non-empty string.`);
+  }
+  if (id.includes('/') || id.includes('..') || id.trim() !== id || id.length > 128) {
+    throw new Error(`Invalid ${label}: contains illegal characters or path traversal.`);
+  }
 }
 
 export { FieldValue, Timestamp };
