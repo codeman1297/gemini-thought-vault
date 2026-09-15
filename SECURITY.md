@@ -10,7 +10,7 @@
 
 ### Zone 1: Input Surfaces
 - **Threat**: Malicious payloads, oversized inputs, and prompt injection attempts.
-- **Mitigation**: Strict schema validation via TypeScript interfaces, 64kb HTTP payload cap on Express body-parser, 10,000-character cap on journal reflections, and strict XML isolation tags (`<user_reflection>`) preventing prompt escape.
+- **Mitigation**: Multi-layer defense-in-depth including strict schema validation via TypeScript interfaces, 64kb HTTP payload cap on Express body-parser, 10,000-character cap on journal reflections, architectural separation of top-level `systemInstruction` from untrusted user content, XML demarcation boundary tags (`<user_reflection>`), absence of dynamic tool execution or shell capabilities, and strict post-generation JSON schema validation and sanitization.
 
 ### Zone 2: Planning & Reasoning (Gemini Interactions)
 - **Threat**: Prompt injection attempting to manipulate model persona, leak system instructions, or execute arbitrary operations.
@@ -22,7 +22,7 @@
 
 ### Zone 4: Memory & State (Firestore Persistence)
 - **Threat**: Cross-user data tampering, unauthorized thread access, or ID substitution.
-- **Mitigation**: Absolute user data isolation. Authoritative user identity is extracted server-side strictly from verified Firebase ID tokens (`req.user.uid`). All queries and Firestore security rules strictly scope documents to `/users/{userId}/threads/{threadId}/interactions/{interactionId}` with `request.auth.uid == userId`.
+- **Mitigation**: Strict user data isolation. Authoritative user identity is extracted server-side strictly from verified Firebase ID tokens (`req.user.uid`). All queries and Firestore security rules strictly scope documents to `/users/{userId}/threads/{threadId}/interactions/{interactionId}` with `request.auth.uid == userId`.
 
 ### Zone 5: Inter-System Communication & Secrets
 - **Threat**: Secret leakage in logs, frontend bundles, source control, or error traces.

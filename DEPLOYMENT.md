@@ -118,8 +118,8 @@ gcloud run deploy "${SERVICE_NAME}" \
 - `--set-labels="dev-tutorial=cloud-run-ai-challenge"`: Official challenge verification label.
 - `--cpu=1` & `--memory=512Mi`: Sized efficiently for Node.js Express + AI orchestration.
 - `--concurrency=80` & `--timeout=60s`: Handles up to 80 concurrent connections per container instance with a 60-second execution timeout.
-- `--max-instances=10` & `--min-instances=0`: Protects against runaway autoscaling and unexpected billing costs while scaling to zero when idle.
-- *Note*: These resource and scaling limits provide operational boundaries rather than absolute cost ceilings. In-memory sliding-window rate limiters operate per Cloud Run container instance.
+- `--max-instances=10` & `--min-instances=0`: Protects against runaway autoscaling while enabling cost-effective scale-to-zero when idle.
+- *Note*: These resource and scaling limits provide operational boundaries rather than absolute cost ceilings. In-memory sliding-window rate limiters operate instance-locally per Cloud Run container instance (Chat: 15 req/min, Ask: 10 req/min, Evolution: 4 req/min, Insights: 4 req/min per UID) and do not represent a distributed global quota across instances.
 
 ---
 
@@ -213,3 +213,63 @@ When rotating the Gemini API key, execute this zero-downtime rotation procedure:
    ```bash
    gcloud secrets versions destroy VERSION_NUMBER --secret="${SECRET_NAME}" --project="${PROJECT_ID}"
    ```
+
+---
+
+## 9. Challenge Verification & Live Infrastructure Status
+
+### Verification Status Taxonomy
+- **`SOURCE-LEVEL VERIFIED`**: Implementation, configuration schemas, Docker packaging, and architectural declarations are present and statically verified in the repository.
+- **`LOCAL EXECUTION VERIFIED`**: Functionality, algorithmic constraints, fail-closed handling, and isolation invariants are executed and passing via automated test suites and local runtime checks.
+- **`LIVE PRODUCTION VERIFIED`**: Functionality verified against active, publicly deployed Google Cloud infrastructure with provisioned services.
+- **`NOT AVAILABLE`**: Operational steps requiring active production GCP project deployment or external credentials.
+
+### Verifying the Challenge Label
+To verify that the deployed Cloud Run service bears the required challenge label post-deployment:
+```bash
+gcloud run services describe "${SERVICE_NAME}" \
+  --region="${REGION}" \
+  --format="value(metadata.labels)"
+```
+Expected output:
+```text
+dev-tutorial=cloud-run-ai-challenge
+```
+
+### Google AI Studio Usage & Authenticity
+- **SOURCE-LEVEL VERIFIED: AI Studio-related project metadata/configuration and Gemini integration are present in the repository.**
+- Where development workflow is described, this is distinguished from independently verifiable repository evidence.
+- Repository configuration files (`metadata.json`, `package.json`, environment templates) verify AI Studio tooling compatibility and Gemini integration at the source level, without asserting historical or external telemetry beyond what is present in the repository artifacts.
+
+### Remaining Live Verification Gaps
+The following verification items require live deployment to an active Google Cloud Platform project and cannot be verified solely within the repository or local execution environment:
+1. **Standalone Cloud Run Deployment**: Live service deployment and publicly accessible URL outside the development/preview environment.
+2. **Live Challenge Label Verification**: Confirmation of `dev-tutorial=cloud-run-ai-challenge` via `gcloud run services describe --format="value(metadata.labels)"` on an active Cloud Run instance.
+3. **Secret Manager Runtime Binding**: Live GCP Secret Manager IAM role assignment (`roles/secretmanager.secretAccessor`) and runtime container mounting (`--set-secrets`).
+4. **Live Firestore Security Rules Deployment**: Production rules compilation and live enforcement via `firebase deploy --only firestore:rules`.
+5. **Production Google Sign-In**: Live OAuth flow with production authorized domain registration in the Firebase Authentication console.
+6. **Live Two-User Isolation Verification**: Multi-tenant isolation verification across two distinct Google accounts on a deployed Cloud Run instance with live Firestore.
+7. **Live Cloud Run Distributed Concurrency**: Multi-container horizontal autoscaling, cold-start latency under traffic, and distributed concurrency characteristics.
+
+---
+
+## 10. Evaluator Verification Checklist & Live Demo Guide
+
+> **Live Ideathon Walkthrough**: Refer to [DEMO.md](DEMO.md) for the complete 3–5 minute presentation script, technical architecture breakdown, and security demonstration scenarios.
+
+- [ ] **1. Google Sign-In Works**: Authenticates via Firebase Web SDK; session resolves with verified UID in Session Identity Banner.
+- [ ] **2. Gemini Interaction Works**: Prompt generates multi-turn response through server-side Gemini SDK using 4-tier fallback ladder.
+- [ ] **3. Journal Persistence Works**: Prompts, responses, and metadata persist authoritatively to Cloud Firestore (`users/{uid}/threads/{threadId}/interactions/{id}`).
+- [ ] **4. Reflection Works**: Structured insights (`coreThemes`, `sentimentTrajectory`, `openQuestions`, `actionableSteps`) generate and display inline with Firestore persistence badge.
+- [ ] **5. Thought Evolution Works**: Computes longitudinal report across threads with 90s transactional lock, canonical content hashing, and supporting evidence drawer.
+- [ ] **6. Ask My Journal Works**: REST endpoint (`POST /api/journal/ask`) executes bounded retrieval (25 threads, 150 interactions), prunes hallucinated citations, and coalesces in-flight queries.
+- [ ] **7. Personal Insights Works**: Longitudinal analysis displays developing/established/dormant themes with 30-minute FIFO cache and reflection prompt injection.
+- [ ] **8. User Isolation Verified**: Cross-user Firestore reads/writes are blocked by `firestore.rules`; server rejects client-supplied UID tampering (`HTTP 403`).
+- [ ] **9. Secret Manager Configured**: `GEMINI_API_KEY` is injected at container boot from secret `gemini-thoughtvault-api-key`; zero keys in client code or Git.
+- [ ] **10. Cloud Run Deployed**: Service configured in region `asia-southeast1` with port 3000, 1 CPU, 512Mi memory, concurrency 80, and timeout 60s.
+- [ ] **11. Cloud Run Label Applied**: Service metadata confirms label `dev-tutorial=cloud-run-ai-challenge`.
+- [ ] **12. Production URL Tested**: `/health` and `/api/health` return HTTP 200 with JSON status payload and security headers.
+- [ ] **13. README Contains Deployment Instructions**: Step-by-step instructions for GCP project setup, Secret Manager, Cloud Run, and Firestore deployment are documented.
+- [ ] **14. GitHub Repository Ready**: Clean repository state with zero secrets, strict `.gitignore`, multi-stage `Dockerfile`, and 13 automated test suites.
+
+
