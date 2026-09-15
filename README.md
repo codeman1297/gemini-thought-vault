@@ -61,7 +61,7 @@ Personal journaling captures our most vulnerable thoughts, aspirations, mental h
 
 ### The Solution: Gemini ThoughtVault
 **Gemini ThoughtVault** is an enterprise-grade, zero-trust personal AI journal built according to a rigorous 43-point **Production Security Constitution**:
-- **Absolute User Isolation**: All journal documents, reflections, caches, and insights are partitioned into owner-bound Firestore namespaces (`/users/{uid}/...`). Client-supplied user IDs are strictly ignored; identity is derived exclusively from cryptographically verified Firebase ID tokens on the server.
+- **User Data Isolation Architecture**: All journal documents, reflections, caches, and insights are partitioned into owner-bound Firestore namespaces (`/users/{uid}/...`). Client-supplied user IDs are rejected; identity is derived exclusively from cryptographically verified Firebase ID tokens on the server.
 - **Server-Side AI Gateway**: The Google Gemini API is accessed exclusively from within the Cloud Run backend container. The browser never receives, transmits, or possesses the Gemini API key.
 - **Runtime Secret Injection**: Production API keys are stored in **Google Cloud Secret Manager** and injected into the container environment at boot using least-privilege IAM bindings (`roles/secretmanager.secretAccessor`).
 - **Authoritative Server-Side History**: Multi-turn reflection history is loaded directly from authenticated Firestore records on the server. Client-provided conversation histories are completely discarded.
@@ -173,7 +173,7 @@ Gemini ThoughtVault enforces defense-in-depth across the **Five Critical Threat 
 - **Static File Shielding**: Server explicitly intercepts and blocks requests to sensitive server artifacts (`/server.cjs`, `/server.cjs.map`, `/.env*`, `/package.json`, `/tsconfig.json`, `/firestore.rules`) with HTTP 404.
 - **Resource Abuse Rate Limiting**: Per-UID sliding-window memory limiters throttle expensive AI generation operations (Chat: 15/min, Ask: 10/min, Evolution: 4/min, Insights: 4/min).
 
-### Zone 4: Memory & State (Absolute User Data Isolation)
+### Zone 4: Memory & State (User Data Isolation Architecture)
 - **Zero Client Identity Trust**: Client-supplied `userId` fields in JSON bodies or URL query parameters are completely ignored. User identity is derived strictly from `req.user.uid` following cryptographic verification by the Firebase Admin SDK.
 - **Route Enumeration Resistance**: When User A attempts to request User B's thread ID (`GET /api/journal/threads/thread_of_user_b`), the backend returns `404 Thread not found or unauthorized` (`THREAD_NOT_FOUND`), refusing to reveal whether the resource exists.
 - **Client Cache Denial**: All internal caches (`ask_cache`, `insight_cache`) and transactional locks (`evolution/lock`) are marked `allow read, write: if false;` in `firestore.rules`. Direct browser access is completely forbidden; only the server's Firebase Admin SDK can interact with them.
@@ -585,7 +585,7 @@ The **Ask Cache** (`server/services/askCache.ts`) provides high-speed, zero-leak
 
 ## 15. Two-User Isolation & Security Invariants
 
-To guarantee that User A can never view, mutate, or infer User B's journal entries under any circumstances, ThoughtVault enforces three inviolable architectural invariants:
+To enforce that User A cannot view, mutate, or infer User B's journal entries, ThoughtVault implements strict architectural invariants across API routing, identity resolution, and database rules:
 
 1. **Authentication Token as Sole Identity Source**:
    The backend extracts identity exclusively from `admin.auth().verifyIdToken(token)`. If a request payload contains `{ "userId": "victim_uid" }`, the parameter is discarded. All Firestore queries are constructed using:
@@ -927,7 +927,7 @@ An independent reviewer can verify the complete implementation in under 5 minute
 - [x] **Step 4: Verify Multi-Stage Dockerfile**: Inspect `Dockerfile` to confirm dual-stage build and non-root execution (`USER node`).
 - [x] **Step 5: Verify Secret Shielding**: Check `.dockerignore` and `server.ts` to confirm zero credentials in container layers.
 - [x] **Step 6: Inspect Firestore Security Rules**: Review `firestore.rules` for catch-all default deny and owner-bound isolation.
-- [x] **Step 7: Verify Two-User Isolation Invariant**: Run `npx tsx server/test/e2eProductionVerification.test.ts` to verify absolute cross-user isolation.
+- [x] **Step 7: Verify Two-User Isolation Invariant**: Run `npx tsx server/test/e2eProductionVerification.test.ts` to verify cross-user isolation controls.
 - [x] **Step 8: Verify 4-Tier Fallback Ladder**: Check `server/services/gemini.ts` for constitution-compliant model ladder (`gemini-3.6-flash` -> `gemini-3.1-flash-lite` -> `gemini-flash-latest` -> `gemini-3.7-flash`).
 - [x] **Step 9: Verify Challenge Label**: Confirm deployment command includes `--set-labels="dev-tutorial=cloud-run-ai-challenge"`.
 - [x] **Step 10: Verify Health Endpoints**: Execute `curl http://localhost:3000/health` to confirm fast, unauthenticated health status.

@@ -591,6 +591,7 @@ async function main() {
   console.log(`\n======================================================`);
   console.log(`Reliability & Observability Tests: ${passedTests}/${totalTests} Passed (100%)`);
   console.log(`======================================================\n`);
+  process.exit(0);
 }
 
 main().catch((err) => {
